@@ -1,0 +1,490 @@
+---
+title: "状態空間モデルを用いた効果推定方法の比較"
+author: "tatamiya"
+date: "2023-10-07"
+output:
+  pdf_document:
+    latex_engine: xelatex
+mainfont: Hiragino Kaku Gothic Pro
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(KFAS)
+library(CausalImpact)
+```
+
+# 結論
+
+|種類|共変量なし|共変量あり|
+|--|--|--|
+|平滑化推定値|0.143|0.0819|
+|Out-of-sample 予測値|0.180|0.0783|
+
+
+Causal Impact: 0.0745
+
+# Data Loading
+
+```{r}
+set.seed(1)
+x1 <- 100 + arima.sim(model=list(ar=0.999), n=100)
+y_0 <- 1.2 * x1 + rnorm(100)
+y_1 <- y_0
+y_1[71:100] <- y_1[71:100] + rnorm(30, 10,2)
+
+time.points <- seq.Date(as.Date("2014-01-01"), by=1, length.out=100)
+post_start_date <- as.Date("2014-03-12")
+
+data<-data.frame(day=time.points, y1=y_1, y0=y_0, x1=x1)
+data<- data %>% mutate(is_post=case_when(day>=post_start_date~1, .default = 0))
+
+p <- ggplot(data=data) +
+  geom_line(aes(x=day, y=y0, color="y0")) +
+  geom_line(aes(x=day, y=y1, color="y1")) + 
+  geom_line(aes(x=day, y=x1, color="x1")) +
+  geom_vline(xintercept=post_start_date, linetype='dashed')
+print(p)
+```
+
+```{r}
+data_pre <- data %>% filter(day<post_start_date)
+data_post <- data %>% filter(day>=post_start_date)
+```
+
+# 1. 介入フラグを用いた回帰（smoothed states）
+
+```{r}
+model1 <- SSModel(y1 ~ SSMtrend(degree = 1, Q = NA) + 
+                   SSMregression(~is_post, Q=NA)
+                 , data=data, H=NA)
+
+fit1 <- fitSSM(model1, numeric(3), method="BFGS")
+```
+
+## 予測（全成分）
+
+```{r}
+pred1_all <- predict(fit1$model, states="all", interval="prediction", level=0.95)
+
+data1_all <- data %>% mutate(pred=pred1_all[,1], lwr=pred1_all[,2], upr=pred1_all[,3])
+
+p <- ggplot(data1_all) +
+  geom_line(aes(x=day, y=y1), color="black") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)+
+  geom_vline(xintercept=post_start_date, linetype='dashed')
+print(p)
+```
+
+## 予測（トレンド）
+
+```{r}
+pred1_trend <- predict(fit1$model, states="trend", interval="confidence", level=0.95)
+
+data1_trend <- data %>% mutate(pred=pred1_trend[,1], lwr=pred1_trend[,2], upr=pred1_trend[,3])
+
+p <- ggplot(data1_trend) +
+  geom_line(aes(x=day, y=y1), color="black") + 
+  geom_line(aes(x=day, y=y0), color="black", linetype="dashed") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+## 介入効果の推定
+
+### 介入フラグなしの仮想予測値との差
+
+```{r}
+data1_cf <- data1_trend %>% 
+  mutate(pred_lift=y1 - pred, actual_lift=y1-y0) %>%
+  mutate(ymin=pred_lift - (pred - lwr), ymax=pred_lift+(upr-pred))
+
+p <- ggplot(data1_cf) +
+  geom_line(aes(x=day, y=actual_lift), color="black") + 
+  geom_line(aes(x=day, y=pred_lift), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_ribbon(aes(x = day, ymin = ymin, ymax = ymax),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+MAPE
+
+```{r}
+data1_ape_cf <- data1_cf %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred_lift) / actual_lift)
+
+mape1_cf <- mean(data1_ape_cf$ape)
+print(mape1_cf)
+```
+
+### 介入フラグによる寄与
+
+```{r}
+pred1_reg <- predict(fit1$model, states="regression", interval="confidence", level=0.95)
+
+data1_reg <- data %>%
+  mutate(pred=pred1_reg[,1], lwr=pred1_reg[,2], upr=pred1_reg[,3]) %>%
+  mutate(actual_lift=y1-y0)
+
+
+p <- ggplot(data1_reg) +
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_line(aes(x=day, y=actual_lift), color="black") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+MAPE
+
+```{r}
+data1_ape <- data1_reg %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred) / actual_lift)
+
+mape1 <- mean(data1_ape$ape)
+print(mape1)
+```
+
+
+# 2. 介入フラグ＋外部変数による回帰 (smoothed state)
+
+```{r}
+model2 <- SSModel(y1 ~ SSMtrend(degree = 1, Q = NA) + 
+                   SSMregression(~x1 + is_post, Q=NA)
+                 , data=data, H=NA)
+
+fit2 <- fitSSM(model2, numeric(3), method="BFGS")
+```
+
+## 予測（全成分）
+
+```{r}
+pred2_all <- predict(fit2$model, states="all", interval="prediction", level=0.95)
+
+data2_all <- data %>% mutate(pred=pred2_all[,1], lwr=pred2_all[,2], upr=pred2_all[,3])
+
+p <- ggplot(data2_all) +
+  geom_line(aes(x=day, y=y1), color="black") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)+
+  geom_vline(xintercept=post_start_date, linetype='dashed')
+print(p)
+```
+
+## 予測（トレンド + 共変量による回帰）
+
+```{r}
+pred2_trend <- predict(fit2$model, states=c(1, 3), interval="confidence", level=0.95)
+
+data2_trend <- data %>% mutate(pred=pred2_trend[,1], lwr=pred2_trend[,2], upr=pred2_trend[,3])
+
+p <- ggplot(data2_trend) +
+  geom_line(aes(x=day, y=y1), color="black") + 
+  geom_line(aes(x=day, y=y0), color="black", linetype="dashed") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+## 介入効果の推定
+
+### 介入なしとの仮想予測値との比較
+
+```{r}
+data2_cf <- data2_trend %>% 
+  mutate(pred_lift=y1 - pred, actual_lift=y1-y0) %>%
+  mutate(ymin=pred_lift - (pred - lwr), ymax=pred_lift+(upr-pred))
+
+p <- ggplot(data2_cf) +
+  geom_line(aes(x=day, y=actual_lift), color="black") + 
+  geom_line(aes(x=day, y=pred_lift), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_ribbon(aes(x = day, ymin = ymin, ymax = ymax),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+MAPE
+
+```{r}
+data2_ape_cf <- data2_cf %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred_lift) / actual_lift)
+
+mape2_cf <- mean(data2_ape_cf$ape)
+print(mape2_cf)
+```
+
+### 介入フラグによる寄与
+
+```{r}
+pred2_reg <- predict(fit2$model, states=2, interval="confidence", level=0.95)
+
+data2_reg <- data %>%
+  mutate(pred=pred2_reg[,1], lwr=pred2_reg[,2], upr=pred2_reg[,3]) %>%
+  mutate(actual_lift=y1-y0)
+
+
+p <- ggplot(data2_reg) +
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_line(aes(x=day, y=actual_lift), color="black") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+MAPE
+
+```{r}
+data2_ape <- data2_reg %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred) / actual_lift)
+
+mape2 <- mean(data2_ape$ape)
+print(mape2)
+```
+
+# 3. Out-of-sample 予測値からの推定（共変量なし）
+
+
+```{r}
+model3 <- SSModel(y1 ~ SSMtrend(degree = 1, Q = NA),
+                 data=data_pre, H=NA)
+
+fit3 <- fitSSM(model3, numeric(2), method="BFGS")
+```
+
+## 予測（全成分）
+
+```{r}
+pred3_all_pre <- predict(fit3$model, states="all", interval="prediction", level=0.95)
+pred3_all_post <- predict(fit3$model, states="all", interval="prediction", n.ahead = 30, level=0.95)
+
+data3_all <- data %>%
+  mutate(pred=c(pred3_all_pre[,1], pred3_all_post[,1]),
+         lwr=c(pred3_all_pre[,2], pred3_all_post[,2]),
+         upr=c(pred3_all_pre[,3], pred3_all_post[,3]))
+
+p <- ggplot(data3_all) +
+  geom_line(aes(x=day, y=y1), color="black") + 
+  geom_line(aes(x=day, y=y0), color="black", linetype="dashed") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+## 介入効果の推定
+
+### 介入なしの仮想予測値との差分
+
+```{r}
+data3_effect <- data3_all %>%
+  mutate(pred_lift=y1 - pred, actual_lift=y1-y0) %>%
+  mutate(ymin = pred_lift - (pred-lwr), ymax=pred_lift + (upr-pred))
+
+
+p <- ggplot(data3_effect) +
+  geom_line(aes(x=day, y=pred_lift), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_line(aes(x=day, y=actual_lift), color="black") + 
+  geom_ribbon(aes(x = day, ymin = ymin, ymax = ymax),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+MAPE
+
+```{r}
+data3_ape <- data3_effect %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred_lift) / actual_lift)
+
+mape3 <- mean(data3_ape$ape)
+print(mape3)
+```
+
+
+# 4. Out-of-sample 予測値からの推定（共変量あり）
+
+```{r}
+model4 <- SSModel(y1 ~ SSMtrend(degree = 1, Q = NA)+
+                   SSMregression(~x1, Q=NA),
+                 data=data_pre, H=NA)
+
+fit4 <- fitSSM(model4, numeric(3), method="BFGS")
+```
+
+## 予測（全成分）
+
+```{r}
+pred4_all_pre <- predict(fit4$model, states="all", interval="prediction", level=0.95)
+
+newdata4 <- SSModel(rep(NA, length(data_post$x1)) ~ SSMtrend(degree = 1, Q=fit4$model$Q[4])+
+                   SSMregression(~data_post$x1, Q=fit4$model$Q[1]), H=fit4$model$H
+                 )
+pred4_all_post <- predict(fit4$model, states="all", interval="prediction", newdata = newdata4, level=0.95)
+
+data4_all <- data %>%
+  mutate(pred=c(pred4_all_pre[,1], pred4_all_post[,1]),
+         lwr=c(pred4_all_pre[,2], pred4_all_post[,2]),
+         upr=c(pred4_all_pre[,3], pred4_all_post[,3]))
+
+p <- ggplot(data4_all) +
+  geom_line(aes(x=day, y=y1), color="black") + 
+  geom_line(aes(x=day, y=y0), color="black", linetype="dashed") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+## 介入効果の推定
+
+### 介入なしの仮想予測値との差
+
+```{r}
+data4_effect <- data4_all %>%
+  mutate(pred_lift=y1 - pred, actual_lift=y1-y0) %>%
+  mutate(ymin = pred_lift - (pred-lwr), ymax=pred_lift + (upr-pred))
+
+
+p <- ggplot(data4_effect) +
+  geom_line(aes(x=day, y=pred_lift), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_line(aes(x=day, y=actual_lift), color="black") + 
+  geom_ribbon(aes(x = day, ymin = ymin, ymax = ymax),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+MAPE
+
+```{r}
+data4_ape <- data4_effect %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred_lift) / actual_lift)
+
+mape4 <- mean(data4_ape$ape)
+print(mape4)
+```
+
+# 5. Causal Impact
+
+```{r}
+data4 <- zoo(cbind(y=data$y1, x1=data$x1), data$day)
+
+pre.period <- as.Date(c("2014-01-01", "2014-03-11"))
+post.period <- as.Date(c("2014-03-12", "2014-04-10"))
+
+impact <- CausalImpact(data4, pre.period, post.period)
+plot(impact)
+```
+
+MAPE
+
+```{r}
+summary(impact)
+```
+
+```{r}
+tail(impact$series)
+
+impact_lift <- data %>% 
+  mutate(
+    actual_lift=y1 - y0,
+           pred_lift=impact$series$point.effect,
+           pred_lift_lwr=impact$series$point.effect.lower,
+           pred_lift_upr=impact$series$point.effect.upper
+           ) %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred_lift) / actual_lift)
+
+mape5 <- mean(impact_lift$ape)
+print(mape5)
+```
+# 参考： ローカル線形トレンドモデル
+
+```{r}
+model5 <- SSModel(y1 ~ SSMtrend(degree = 2, Q = c(list(NA),list(NA)))+
+                   SSMregression(~x1, Q=NA),
+                 data=data_pre, H=NA)
+
+fit5 <- fitSSM(model5, numeric(4), method="BFGS")
+```
+
+## 予測（全成分）
+
+```{r}
+pred5_all_pre <- predict(fit5$model, states="all", interval="prediction", level=0.95)
+
+dim(fit5$model$Q)
+dim(array(fit5$model$Q[2:3,2:3,1], dim=c(2,2,1)))
+
+Q <- array(fit5$model$Q[2:3,2:3,1], dim=c(2,2,1))
+newdata5 <- SSModel(rep(NA, length(data_post$x1)) ~ SSMtrend(degree = 2, Q=c(list(Q[1]), list(Q[4])))+
+                   SSMregression(~data_post$x1, Q=fit5$model$Q[1]), H=fit5$model$H
+                 )
+pred5_all_post <- predict(fit5$model, states="all", interval="prediction", newdata = newdata5, level=0.95)
+
+data5_all <- data %>%
+  mutate(pred=c(pred5_all_pre[,1], pred5_all_post[,1]),
+         lwr=c(pred5_all_pre[,2], pred5_all_post[,2]),
+         upr=c(pred5_all_pre[,3], pred5_all_post[,3]))
+
+p <- ggplot(data5_all) +
+  geom_line(aes(x=day, y=y1), color="black") + 
+  geom_line(aes(x=day, y=y0), color="black", linetype="dashed") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+## 介入効果の推定
+
+### 介入なしの仮想予測値との差
+
+```{r}
+data5_effect <- data5_all %>%
+  mutate(pred_lift=y1 - pred, actual_lift=y1-y0) %>%
+  mutate(ymin = pred_lift - (pred-lwr), ymax=pred_lift + (upr-pred))
+
+
+p <- ggplot(data5_effect) +
+  geom_line(aes(x=day, y=pred_lift), color="blue", linetype="dashed") + 
+  geom_vline(xintercept=post_start_date, linetype='dashed')+
+  geom_line(aes(x=day, y=actual_lift), color="black") + 
+  geom_ribbon(aes(x = day, ymin = ymin, ymax = ymax),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+MAPE
+
+```{r}
+data5_ape <- data5_effect %>%
+  filter(day>=post_start_date) %>%
+  mutate(ape=abs(actual_lift - pred_lift) / actual_lift)
+
+mape5 <- mean(data5_ape$ape)
+print(mape5)
+```
+
