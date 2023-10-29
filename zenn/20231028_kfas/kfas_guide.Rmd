@@ -179,31 +179,141 @@ y_t = (1, 0)
 \end{aligned}
 $$
 
-$$
-\begin{aligned}
-\boldsymbol{Z}= (1, 0), \quad 
-\boldsymbol{\alpha}_t = 
-\begin{pmatrix}
-\mu_t\\
-\delta_t
-\end{pmatrix}, \quad \boldsymbol{H} = \sigma_\varepsilon^2\\
+## モデリング
 
+```{r}
+model_st <- SSModel(y ~ SSMtrend(degree = 2, Q = c(list(0), list(NA))),
+                 data=data, H=NA)
+
+fit_st <- fitSSM(model_st, numeric(2), method="BFGS")
+```
+
+
+### モデルパラメータ
+
+$$
+\boldsymbol{Z} = (1,0)
+$$
+
+```{r}
+model_st$Z
+```
+
+$$
 \boldsymbol{T} =
 \begin{pmatrix}
 1 & 1\\
 0 & 1
-\end{pmatrix}, \quad 
+\end{pmatrix}
+$$
+
+
+```{r}
+model_st$T
+```
+
+$$
 \boldsymbol{R} = \begin{pmatrix}
 1 & 0\\
 0 & 1
-\end{pmatrix}, \quad
+\end{pmatrix}
+$$
+
+
+```{r}
+model_st$R
+```
+
+
+### 推定パラメータ
+
+$$
+\boldsymbol{H}=\sigma_\varepsilon^2
+$$
+
+```{r}
+fit_st$model$H
+```
+
+
+$$
 \boldsymbol{Q} = 
 \begin{pmatrix}
 0 & 0\\
 0 & \sigma_\zeta^2
 \end{pmatrix}
-\end{aligned}
 $$
+```{r}
+fit_st$model$Q
+
+```
+
+## 結果
+
+### 全成分
+
+$$
+P(y_t \vert y_{1:T})
+$$
+
+```{r}
+data_all_st <- makeDataFrameQuantile(fitted_model = fit_st$model, data=data, states = "all", interval = "prediction", n_ahead=10) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_all_st) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=y), color="black") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+### トレンド成分
+
+$$
+  P(\mu_t \vert y_{1:T})
+$$
+
+```{r}
+data_trend_st <- makeDataFrameQuantile(fitted_model = fit_st$model,
+                                     data=data,
+                                     states = "trend",
+                                     interval = "confidence",
+                                     n_ahead=10
+                                     ) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_trend_st) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+### 傾き成分
+
+$$
+  P(\delta_t \vert y_{1:T})
+$$
+
+```{r}
+data_slope_st <- makeDataFrameQuantile(fitted_model = fit_st$model,
+                                     data=data,
+                                     states = "slope",
+                                     interval = "confidence",
+                                     n_ahead=10
+                                     ) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_slope_st) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
 
 
 # ローカル線形トレンドモデル
@@ -266,34 +376,137 @@ w_t\\
 \end{aligned}
 $$
 
-$$
-\begin{aligned}
-\boldsymbol{Z}= (1, 0), \quad 
-\boldsymbol{\alpha}_t = 
-\begin{pmatrix}
-\mu_t\\
-\delta_t
-\end{pmatrix}, \quad \boldsymbol{H} = \sigma_\varepsilon^2\\
+## モデリング
 
+```{r}
+model_lt <- SSModel(y ~ SSMtrend(degree = 2, Q = c(list(NA), list(NA))),
+                 data=data, H=NA)
+
+fit_lt <- fitSSM(model_lt, numeric(3), method="BFGS")
+```
+
+### モデルパラメータ
+
+$$
+\boldsymbol{Z} = (1,0)
+$$
+
+```{r}
+model_lt$Z
+```
+
+$$
 \boldsymbol{T} =
 \begin{pmatrix}
 1 & 1\\
 0 & 1
-\end{pmatrix}, \quad 
+\end{pmatrix}
+$$
+
+
+```{r}
+model_lt$T
+```
+
+$$
 \boldsymbol{R} = \begin{pmatrix}
 1 & 0\\
 0 & 1
-\end{pmatrix}, \quad
+\end{pmatrix}
+$$
 
-\boldsymbol{\eta}_t =
-\begin{pmatrix}
-w_t\\
-\zeta_t
-\end{pmatrix}, \quad
+
+```{r}
+model_lt$R
+```
+
+
+### 推定パラメータ
+
+$$
+\boldsymbol{H}=\sigma_\varepsilon^2
+$$
+
+```{r}
+fit_lt$model$H
+```
+
+
+$$
 \boldsymbol{Q} = 
 \begin{pmatrix}
 \sigma_w^2 & 0\\
 0 & \sigma_\zeta^2
 \end{pmatrix}
-\end{aligned}
 $$
+```{r}
+fit_lt$model$Q
+```
+
+## 結果
+
+### 全成分
+
+$$
+P(y_t \vert y_{1:T})
+$$
+
+```{r}
+data_all_lt <- makeDataFrameQuantile(fitted_model = fit_lt$model, data=data, states = "all", interval = "prediction", n_ahead=10) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_all_lt) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=y), color="black") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+### トレンド成分
+
+$$
+  P(\mu_t \vert y_{1:T})
+$$
+
+```{r}
+data_trend_lt <- makeDataFrameQuantile(fitted_model = fit_lt$model,
+                                     data=data,
+                                     states = "trend",
+                                     interval = "confidence",
+                                     n_ahead=10
+                                     ) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_trend_lt) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+### 傾き成分
+
+$$
+  P(\delta_t \vert y_{1:T})
+$$
+
+```{r}
+data_slope_lt <- makeDataFrameQuantile(fitted_model = fit_lt$model,
+                                     data=data,
+                                     states = "slope",
+                                     interval = "confidence",
+                                     n_ahead=10
+                                     ) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_slope_lt) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
