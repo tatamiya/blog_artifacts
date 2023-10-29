@@ -1,0 +1,299 @@
+---
+title: "KFAS Cookbook 的なもの"
+author: "tatamiya"
+date: "2023-10-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(KFAS)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+```
+
+# 一般形
+
+$$
+\begin{aligned}
+    \boldsymbol{y}_t &= \boldsymbol{Z}_t \boldsymbol{\alpha}_t + \boldsymbol{\boldsymbol{\varepsilon}}_t, \quad \boldsymbol{\varepsilon}_t \sim N(\boldsymbol{0}, \boldsymbol{H}_t)\\
+    \boldsymbol{\alpha}_{t+1} &= \boldsymbol{T}_t \boldsymbol{\alpha}_t + \boldsymbol{R}_t \boldsymbol{\eta}_t, \quad \boldsymbol{\eta}_t \sim N(\boldsymbol{0}, \boldsymbol{Q}_t)
+\end{aligned}
+$$
+
+# サンプルデータの準備
+
+```{r}
+set.seed(13)
+x1 <- 100 + arima.sim(model=list(ar=0.999), n=100)
+
+s <- 2.5 * sin(seq(0, 99, length.out=100) * 2 * pi / 4)
+y <- 1.2 * x1 + s + rnorm(100)
+y[71:100] <- y[71:100] + 10
+
+time.points <- seq.Date(as.Date("2014-01-01"), by=1, length.out=100)
+datetime_cp <- time.points[71]
+
+data <- data.frame(day=time.points, y=y, x1=x1) %>%
+  mutate(flg_interfere = case_when(day>=datetime_cp~1, .default = 0)) 
+
+p1 <- ggplot(data=data) +
+  geom_line(aes(x=day, y=y))
+
+p2 <- ggplot(data=data) +
+  geom_line(aes(x=day, y=x1))
+
+grid.arrange(p1, p2)
+```
+```{r, include=FALSE}
+makeDataFrameQuantile <- function(data, fitted_model, states="all", interval="prediction", n_ahead=5, level=0.95){
+  
+  alphahat <- predict(fitted_model, interval=interval, states=states, level=level)
+  
+  pred <- predict(fitted_model, interval=interval, states=states, n.ahead = n_ahead, level=level)
+  
+  date_estimated <- seq(
+    from=data$day[1],
+    by="days",
+    len=length(data$day)+n_ahead)
+  
+  estimated <- data.frame(day = date_estimated,
+                          pred = c(alphahat[, 1], pred[, 1]),
+                          lwr = c(alphahat[, 2], pred[, 2]),
+                          upr = c(alphahat[, 3], pred[, 3])
+  )
+  
+  return(estimated)
+}
+```
+
+
+# Local Level Model
+
+$$
+\begin{aligned}
+y_t &= \mu_t + \varepsilon_t, \quad \varepsilon_t \sim N(0, \sigma_\varepsilon^2)\\
+\mu_{t+1} &= \mu_t + \eta_t, \quad \eta_t \sim N(0, \sigma_\eta^2)
+\end{aligned}
+$$
+
+```{r}
+model_ll <- SSModel(y ~ SSMtrend(degree = 1, Q = NA),
+                 data=data, H=NA)
+
+fit_ll <- fitSSM(model_ll, numeric(2), method="BFGS")
+```
+
+## 全成分
+
+$$
+P(y_t \vert y_{1:T})
+$$
+
+```{r}
+data_all_ll <- makeDataFrameQuantile(fitted_model = fit_ll$model, data=data, states = "all", interval = "prediction", n_ahead=10) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_all_ll) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=y), color="black") + 
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+## トレンド成分
+
+$$
+  P(\mu_t \vert y_{1:T})
+$$
+
+```{r}
+data_trend_ll <- makeDataFrameQuantile(fitted_model = fit_ll$model,
+                                     data=data,
+                                     states = "trend",
+                                     interval = "confidence",
+                                     n_ahead=10
+                                     ) %>%
+  left_join(data, by="day")
+
+p <- ggplot(data_trend_ll) +
+  geom_vline(xintercept = max(data$day), linetype="dotted")+
+  geom_line(aes(x=day, y=pred), color="blue", linetype="dashed") + 
+  geom_ribbon(aes(x = day, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.5)
+print(p)
+```
+
+# 平滑化トレンドモデル
+
+$$
+\begin{aligned}
+y_t &= \mu_t + \varepsilon_t, \quad \varepsilon_t \sim N(0, \sigma_\varepsilon^2)\\
+\mu_{t+1} &= \mu_t + \delta_t\\
+\delta_{t+1} &= \delta_t +  \zeta_t, \quad \zeta_t \sim N(0, \sigma_\zeta^2)
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+y_t = (1, 0)
+\begin{pmatrix}
+\mu_t\\
+\delta_t
+\end{pmatrix}
++ \varepsilon_t, \quad \varepsilon_t \sim N(0, \sigma_\varepsilon^2)\\
+
+\begin{pmatrix}
+\mu_{t+1}\\
+\delta_{t+1}
+\end{pmatrix}
+=
+\begin{pmatrix}
+1 & 1\\
+0 & 1
+\end{pmatrix}
+\begin{pmatrix}
+\mu_{t}\\
+\delta_{t}
+\end{pmatrix}
++ 
+\begin{pmatrix}
+1 & 0\\
+0 & 1
+\end{pmatrix}
+\boldsymbol{\zeta}_t\\
+
+\boldsymbol{\zeta}_t \sim N\left(
+\begin{pmatrix}
+0\\
+0
+\end{pmatrix},
+\begin{pmatrix}
+0 & 0\\
+0 & \sigma_\zeta^2
+\end{pmatrix}
+\right)
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+\boldsymbol{Z}= (1, 0), \quad 
+\boldsymbol{\alpha}_t = 
+\begin{pmatrix}
+\mu_t\\
+\delta_t
+\end{pmatrix}, \quad \boldsymbol{H} = \sigma_\varepsilon^2\\
+
+\boldsymbol{T} =
+\begin{pmatrix}
+1 & 1\\
+0 & 1
+\end{pmatrix}, \quad 
+\boldsymbol{R} = \begin{pmatrix}
+1 & 0\\
+0 & 1
+\end{pmatrix}, \quad
+\boldsymbol{Q} = 
+\begin{pmatrix}
+0 & 0\\
+0 & \sigma_\zeta^2
+\end{pmatrix}
+\end{aligned}
+$$
+
+
+# ローカル線形トレンドモデル
+
+$$
+\begin{aligned}
+y_t &= \mu_t + \varepsilon_t, \quad \varepsilon_t \sim N(0, \sigma_\varepsilon^2)\\
+\mu_{t+1} &= \mu_t + \delta_t + w_t, \quad w_t \sim N(0, \sigma_w^2) \\
+\delta_{t+1} &= \delta_t +  \zeta_t, \quad \zeta_t \sim N(0, \sigma_\zeta^2)
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+y_t = (1, 0)
+\begin{pmatrix}
+\mu_t\\
+\delta_t
+\end{pmatrix}
++ \varepsilon_t, \quad \varepsilon_t \sim N(0, \sigma_\varepsilon^2)\\
+
+\begin{pmatrix}
+\mu_{t+1}\\
+\delta_{t+1}
+\end{pmatrix}
+=
+\begin{pmatrix}
+1 & 1\\
+0 & 1
+\end{pmatrix}
+\begin{pmatrix}
+\mu_{t}\\
+\delta_{t}
+\end{pmatrix}
++ 
+\begin{pmatrix}
+1 & 0\\
+0 & 1
+\end{pmatrix}
+\begin{pmatrix}
+w_t\\
+\zeta_t
+\end{pmatrix}
+\\
+
+\begin{pmatrix}
+w_t\\
+\zeta_t
+\end{pmatrix}
+\sim N\left(
+\begin{pmatrix}
+0\\
+0
+\end{pmatrix},
+\begin{pmatrix}
+\sigma_w^2 & 0\\
+0 & \sigma_\zeta^2
+\end{pmatrix}
+\right)
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+\boldsymbol{Z}= (1, 0), \quad 
+\boldsymbol{\alpha}_t = 
+\begin{pmatrix}
+\mu_t\\
+\delta_t
+\end{pmatrix}, \quad \boldsymbol{H} = \sigma_\varepsilon^2\\
+
+\boldsymbol{T} =
+\begin{pmatrix}
+1 & 1\\
+0 & 1
+\end{pmatrix}, \quad 
+\boldsymbol{R} = \begin{pmatrix}
+1 & 0\\
+0 & 1
+\end{pmatrix}, \quad
+
+\boldsymbol{\eta}_t =
+\begin{pmatrix}
+w_t\\
+\zeta_t
+\end{pmatrix}, \quad
+\boldsymbol{Q} = 
+\begin{pmatrix}
+\sigma_w^2 & 0\\
+0 & \sigma_\zeta^2
+\end{pmatrix}
+\end{aligned}
+$$
