@@ -1,0 +1,367 @@
+---
+title: "ARIMA_PLUS を R で再現"
+author: "tatamiya"
+date: "2023-12-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(gridExtra)
+library(dplyr)
+library(ggplot2)
+library(forecast)
+```
+
+# この Rmd は？
+
+# サンプルデータの生成
+
+```{r}
+set.seed(13)
+
+tr <- 1.2 * arima.sim(model=list(order=c(1,1,2), ar=c(0.8), ma=c(0.2, -0.8)), n=99)
+s <- 10 * sin(seq(0, 99, length.out=100) * 2 * pi / 7) #-5 *cos(seq(0, 99, length.out=100) * 2 * pi / 2)
+y <- tr  + s + rnorm(100)
+
+time_points <- seq.Date(as.Date("2014-01-01"), by=1, length.out=100)
+
+data <- data.frame(day=time_points, y=y, trend=tr, seasonal=s)
+
+p1 <- ggplot(data=data) +
+  geom_line(aes(x=day, y=y))+
+  labs(x="day", y="y")
+
+p2 <- ggplot(data=data) +
+  geom_line(aes(x=day, y=trend))+
+  labs(x="day", y="trend")
+
+p3 <- ggplot(data=data) +
+  geom_line(aes(x=day, y=seasonal))+
+  labs(x="day", y="seasonal")
+
+
+grid.arrange(p1, p2, p3)
+```
+
+```{r}
+#write.csv(data,"./data/sample_data_for_arima_plus.csv", row.names = FALSE)
+#read.csv("./data/sample_data_for_arima_plus.csv")
+```
+
+
+# モデリング
+
+## STL による Seasonal & Trend Decomposition
+
+```{r}
+data_ts <- ts(data$y, frequency = 7)
+
+stl_results <- stl(data_ts, s.window="per")
+
+plot(stl_results)
+```
+
+```{r}
+data_stl_results <- data %>%
+  mutate(
+  seasonal_stl=stl_results$time.series[,"seasonal"],
+  trend_stl=stl_results$time.series[,"trend"],
+  residual_stl=stl_results$time.series[,"remainder"]
+)
+
+
+p_s <- ggplot(data=data_stl_results) +
+  geom_line(aes(x=day, y=seasonal, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=seasonal_stl, color="STL", linetype="STL"))+
+  scale_color_manual(name="", values = c("STL"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("STL"="solid", "actual"="dashed")) +
+  labs(x="day", y="seasonal")
+
+p_t <- ggplot(data=data_stl_results) +
+  geom_line(aes(x=day, y=trend, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=trend_stl, color="STL", linetype="STL"))+
+  scale_color_manual(name="", values = c("STL"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("STL"="solid", "actual"="dashed")) +
+  labs(x="day", y="trend")
+
+grid.arrange(p_s, p_t)
+```
+
+
+## Trend 成分の ARIMA によるモデル化
+
+### 観測値から STL で得た季節成分を差し引く
+
+```{r}
+data_after_stl <- data.frame(
+  day=time_points,
+  y2=data_ts - stl_results$time.series[,"seasonal"],
+  actual_trend=data$trend
+)
+
+
+p <- ggplot(data=data_after_stl) +
+  geom_line(aes(x=day, y=y2, color="y2", linetype="y2"))+
+  geom_line(aes(x=day, y=actual_trend, color="actual trend", linetype="actual trend"))+
+  scale_color_manual(name="", values = c("y2"="blue", "actual trend"="black")) +
+  scale_linetype_manual(name="", values = c("y2"="solid", "actual trend"="dashed")) +
+  labs(x="day", y="trend")
+
+print(p)
+```
+
+### モデル作成
+
+```{r}
+auto_arima_fit <- auto.arima(data_after_stl$y2)
+coef(auto_arima_fit)
+```
+
+```{r}
+auto_arima_results <- data.frame(day=time_points,
+                            residuals=auto_arima_fit$residuals,
+                            fitted=data_after_stl$y2 - auto_arima_fit$residuals,
+                            actual_trend=data_after_stl$actual_trend
+                            )
+
+p <- ggplot(data=auto_arima_results) +
+  geom_line(aes(x=day, y=actual_trend, color="actual trend", linetype="actual trend"))+
+  geom_line(aes(x=day, y=fitted, color="fitted", linetype="fitted"))+
+  scale_color_manual(name="", values = c("fitted"="blue", "actual trend"="black")) +
+  scale_linetype_manual(name="", values = c("fitted"="solid", "actual trend"="dashed")) +
+  labs(x="day", y="y2")
+print(p)
+```
+
+
+```{r}
+arima_fit <- arima(data_after_stl$y2, order=c(0,0,4), include.mean = FALSE)
+coef(arima_fit)
+```
+
+
+```{r}
+arima_results <- data.frame(day=time_points,
+                            residuals=arima_fit$residuals,
+                            fitted=data_after_stl$y2 - arima_fit$residuals,
+                            actual_trend=data_after_stl$actual_trend
+                            )
+
+p <- ggplot(data=arima_results) +
+  geom_line(aes(x=day, y=actual_trend, color="actual trend", linetype="actual trend"))+
+  geom_line(aes(x=day, y=fitted, color="fitted", linetype="fitted"))+
+  scale_color_manual(name="", values = c("fitted"="blue", "actual trend"="black")) +
+  scale_linetype_manual(name="", values = c("fitted"="solid", "actual trend"="dashed")) +
+  labs(x="day", y="y2")
+print(p)
+```
+
+## 出力結果
+
+```{r}
+data_unified <- data %>%
+  mutate(
+  seasonal_stl=stl_results$time.series[, "seasonal"],
+  trend_arima=auto_arima_fit$fitted,
+) %>%
+  mutate(
+    y_pred=seasonal_stl + trend_arima
+  )
+
+
+p_all <- ggplot(data=data_unified) +
+  geom_line(aes(x=day, y=y, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=y_pred, color="pred", linetype="pred"))+
+  scale_color_manual(name="", values = c("pred"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("pred"="solid", "actual"="dashed")) +
+  labs(x="day", y="y")
+
+p_s <- ggplot(data=data_unified) +
+  geom_line(aes(x=day, y=seasonal, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=seasonal_stl, color="STL", linetype="STL"))+
+  scale_color_manual(name="", values = c("STL"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("STL"="solid", "actual"="dashed")) +
+  labs(x="day", y="seasonal")
+
+p_t <- ggplot(data=data_unified) +
+  geom_line(aes(x=day, y=trend, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=trend_arima, color="arima", linetype="arima"))+
+  scale_color_manual(name="", values = c("arima"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("arima"="solid", "actual"="dashed")) +
+  labs(x="day", y="trend")
+
+grid.arrange(p_all, p_s, p_t)
+```
+
+
+# BQML の結果との比較
+
+```{r}
+bqml_results_org <- read.csv("./data/bqml_arima_plus_results.csv")
+bqml_results <- bqml_results_org %>%
+  mutate(day=as.Date(time_series_timestamp), pred_bqml=time_series_adjusted_data, trend_bqml=trend, seasonal_bqml=seasonal_period_weekly) %>%
+  select(day, pred_bqml, trend_bqml, seasonal_bqml) 
+
+data_with_bqml <- data %>%
+  left_join(bqml_results, by="day")
+```
+
+```{r}
+p_all <- ggplot(data=data_with_bqml) +
+  geom_line(aes(x=day, y=y, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=pred_bqml, color="pred(BQML)", linetype="pred(BQML)"))+
+  scale_color_manual(name="", values = c("pred(BQML)"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("pred(BQML)"="solid", "actual"="dashed")) +
+  labs(x="day", y="y")
+
+p_s <- ggplot(data=data_with_bqml) +
+  geom_line(aes(x=day, y=seasonal, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=seasonal_bqml, color="BQML", linetype="BQML"))+
+  scale_color_manual(name="", values = c("BQML"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("BQML"="solid", "actual"="dashed")) +
+  labs(x="day", y="seasonal")
+
+p_t <- ggplot(data=data_with_bqml) +
+  geom_line(aes(x=day, y=trend, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=trend_bqml, color="BQML", linetype="BQML"))+
+  scale_color_manual(name="", values = c("BQML"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("BQML"="solid", "actual"="dashed")) +
+  labs(x="day", y="trend")
+
+grid.arrange(p_all, p_s, p_t)
+```
+
+## R上での作成モデルとの成分比較
+
+```{r}
+results_by_r <- data_unified %>%
+  select(day, seasonal_stl, trend_arima, y_pred)
+
+data_all <- data_with_bqml %>%
+  left_join(results_by_r, by="day")
+```
+
+
+### 季節成分
+
+```{r}
+p_s <- ggplot(data=data_all) +
+  geom_line(aes(x=day, y=seasonal, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=seasonal_stl, color="STL", linetype="STL"))+
+  geom_line(aes(x=day, y=seasonal_bqml, color="BQML", linetype="BQML"))+
+  scale_color_manual(name="", values = c("BQML"="blue", "STL"="black", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("BQML"="solid", "STL"="solid","actual"="dotted")) +
+  labs(x="day", y="seasonal")
+
+print(p_s)
+```
+
+
+### トレンド成分
+
+```{r}
+p_t <- ggplot(data=data_all) +
+  geom_line(aes(x=day, y=trend, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=trend_arima, color="arima", linetype="arima"))+
+  geom_line(aes(x=day, y=trend_bqml, color="BQML", linetype="BQML"))+
+  scale_color_manual(name="", values = c("BQML"="blue", "arima"="black", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("BQML"="solid", "arima"="solid","actual"="dotted")) +
+  labs(x="day", y="trend")
+
+print(p_t)
+```
+
+## 観測値から BQML による季節成分を差し引いて ARIMA モデル作成
+
+```{r}
+data_bqml_deseasonalized <- data_all %>%
+  mutate(y2=y - seasonal_bqml)
+
+p <- ggplot(data=data_bqml_deseasonalized) +
+  geom_line(aes(x=day, y=trend, color="actual trend", linetype="actual trend"))+
+  geom_line(aes(x=day, y=y2, color="deseasonalized", linetype="deseasonalized"))+
+  scale_color_manual(name="", values = c("deseasonalized"="blue", "actual trend"="black")) +
+  scale_linetype_manual(name="", values = c("deseasonalized"="solid", "actual trend"="dashed")) +
+  labs(x="day", y="trend")
+print(p)
+
+```
+
+
+### auto.arima
+
+
+```{r}
+deseasonalized <- ts(data_bqml_deseasonalized$y2,frequency = 7)
+des_auto_arima_fit <- auto.arima(deseasonalized)
+coef(des_auto_arima_fit)
+```
+
+```{r}
+des_auto_arima_results <- data.frame(day=time_points,
+                            residuals=des_auto_arima_fit$residuals,
+                            fitted=deseasonalized - des_auto_arima_fit$residuals,
+                            trend_bqml=data_all$trend_bqml,
+                            actual_trend=data_after_stl$actual_trend
+                            )
+
+p <- ggplot(data=des_auto_arima_results) +
+  geom_line(aes(x=day, y=actual_trend, color="actual trend", linetype="actual trend"))+
+  geom_line(aes(x=day, y=fitted, color="arima", linetype="arima"))+
+  geom_line(aes(x=day, y=trend_bqml, color="BQML", linetype="BQML"))+
+  scale_color_manual(name="", values = c("BQML"="blue", "arima"="black", "actual trend"="black")) +
+  scale_linetype_manual(name="", values = c("BQML"="solid", "arima"="solid", "actual trend"="dotted")) +
+  labs(x="day", y="y2")
+print(p)
+```
+
+
+### 次数指定
+
+
+```{r}
+des_arima_fit <- arima(data_bqml_deseasonalized$y2, order=c(0,0,4), include.mean = FALSE)
+coef(des_arima_fit)
+```
+
+```{r}
+des_arima_results <- data.frame(day=time_points,
+                            residuals=des_arima_fit$residuals,
+                            fitted=data_bqml_deseasonalized$y2 - des_arima_fit$residuals,
+                            trend_bqml=data_all$trend_bqml,
+                            actual_trend=data_after_stl$actual_trend
+                            )
+
+p <- ggplot(data=des_arima_results) +
+  geom_line(aes(x=day, y=actual_trend, color="actual trend", linetype="actual trend"))+
+  geom_line(aes(x=day, y=fitted, color="arima", linetype="arima"))+
+  geom_line(aes(x=day, y=trend_bqml, color="BQML", linetype="BQML"))+
+  scale_color_manual(name="", values = c("BQML"="blue", "arima"="black", "actual trend"="black")) +
+  scale_linetype_manual(name="", values = c("BQML"="solid", "arima"="solid", "actual trend"="dotted")) +
+  labs(x="day", y="y2")
+print(p)
+```
+
+# 補足： SARIMA モデル
+
+```{r}
+sarima_fit <- auto.arima(data_ts)
+coef(sarima_fit)
+```
+
+```{r}
+sarima_results <- data.frame(day=time_points,
+                            residuals=sarima_fit$residuals,
+                            fitted=data_ts - sarima_fit$residuals,
+                            actual=data_ts
+                            )
+
+p <- ggplot(data=sarima_results) +
+  geom_line(aes(x=day, y=actual, color="actual", linetype="actual"))+
+  geom_line(aes(x=day, y=fitted, color="fitted", linetype="fitted"))+
+  scale_color_manual(name="", values = c("fitted"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("fitted"="solid", "actual"="dashed")) +
+  labs(x="day", y="y")
+print(p)
+```
