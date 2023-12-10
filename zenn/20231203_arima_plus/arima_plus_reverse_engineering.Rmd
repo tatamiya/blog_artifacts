@@ -57,7 +57,7 @@ grid.arrange(p1, p2, p3)
 ```{r}
 data_ts <- ts(data$y, frequency = 7)
 
-stl_results <- stl(data_ts, s.window="per")
+stl_results <- stl(data_ts, s.window=7)
 
 plot(stl_results)
 ```
@@ -210,9 +210,9 @@ data_with_bqml <- data %>%
 ```{r}
 p_all <- ggplot(data=data_with_bqml) +
   geom_line(aes(x=day, y=y, color="actual", linetype="actual"))+
-  geom_line(aes(x=day, y=pred_bqml, color="pred(BQML)", linetype="pred(BQML)"))+
-  scale_color_manual(name="", values = c("pred(BQML)"="blue", "actual"="black")) +
-  scale_linetype_manual(name="", values = c("pred(BQML)"="solid", "actual"="dashed")) +
+  geom_line(aes(x=day, y=pred_bqml, color="BQML", linetype="BQML"))+
+  scale_color_manual(name="", values = c("BQML"="blue", "actual"="black")) +
+  scale_linetype_manual(name="", values = c("BQML"="solid", "actual"="dashed")) +
   labs(x="day", y="y")
 
 p_s <- ggplot(data=data_with_bqml) +
@@ -257,6 +257,9 @@ p_s <- ggplot(data=data_all) +
 print(p_s)
 ```
 
+```{r}
+mean((data_all %>% mutate(seasonal_diff=abs(seasonal_bqml-seasonal_stl)))$seasonal_diff)
+```
 
 ### トレンド成分
 
