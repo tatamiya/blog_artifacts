@@ -1,0 +1,68 @@
+---
+title: "note記事補足ポンチ絵用"
+author: "tatamiya"
+date: "2023-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(gridExtra)
+library(ggplot2)
+```
+
+```{r}
+set.seed(13)
+
+sample_t <- seq(0, 99, length.out=100)
+sample_trend <- 0.001 * sample_t **2
+sample_seas <- sin(sample_t * 2 * pi / 7)
+sample_noise <- 0.3 * rnorm(100)
+
+sample_y <- sample_seas + sample_trend + sample_noise
+
+sample_data <- data.frame(day=sample_t, y=sample_y, trend=sample_trend, seasonal=sample_seas, resid=sample_trend + sample_noise)
+
+p1 <- ggplot(data=sample_data) +
+  geom_line(aes(x=day, y=y))+
+  labs(x="day", y="y") + 
+  theme(
+    axis.title = element_text(size = 25)
+  )
+
+p2 <- ggplot(data=sample_data) +
+  geom_line(aes(x=day, y=resid))+
+  labs(x="day", y="deseasonalized")+
+  theme(
+    axis.title = element_text(size = 25)
+  )
+
+p3 <- ggplot(data=sample_data) +
+  geom_line(aes(x=day, y=seasonal))+
+  labs(x="day", y="seasonal")+
+  theme(
+    axis.title = element_text(size = 25)
+  )
+
+p4 <- ggplot(data=sample_data) +
+  geom_line(aes(x=day, y=trend))+
+  labs(x="day", y="trend")+
+  theme(
+    axis.title = element_text(size = 25)
+  )
+
+print(p1)
+```
+
+```{r}
+print(p2)
+```
+
+
+```{r}
+print(p3)
+```
+
+```{r}
+print(p4)
+```
