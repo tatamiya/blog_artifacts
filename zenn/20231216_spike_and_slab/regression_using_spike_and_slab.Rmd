@@ -1,0 +1,184 @@
+---
+title: "Spike-and-Slab regression using Stan"
+author: "tatamiya"
+date: "2024-01-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages("rstan", dependencies = TRUE)
+library(rstan)
+library(ggplot2)
+library(dplyr)
+```
+
+# データの準備
+
+$$
+y_i = 2 \sin \left(2\pi \frac{x_i}{8}\right) - \cos \left(2\pi \frac{x_i}{2}\right) + \varepsilon_i, \quad \varepsilon_i \sim N(0, 1)
+$$
+
+```{r}
+# Python 版で作成したデータを読み込む
+input_data <- read.csv("data/spike_and_slab_sample_data_sparse.csv")
+```
+
+```{r}
+# 回帰係数の真の値
+true_beta <- c(2, 0, 0, 0, 0, -1)
+
+# 説明変数の定義（計画行列にまとめる）
+generate_design_matrix <- function(x) {
+  design_matrix <- cbind(
+    x1=sin(2*pi*x/8), x2=cos(2*pi*x/8),
+    x3=sin(2*pi*x/4), x4=cos(2*pi*x/4),
+    x5=sin(2*pi*x/2), x6=cos(2*pi*x/2)
+  )
+ return(design_matrix)
+}
+
+# 説明変数の生成（学習データ）
+x_des <- generate_design_matrix(input_data$x)
+dataset <- data.frame(x_des, y=input_data$y)
+```
+
+
+```{r}
+# 目的変数真値の可視化用データの作成
+x_min <- 0.0
+x_max <- 8.0
+x_sample <- seq(x_min, x_max, 0.01)
+
+x_des_sample <- generate_design_matrix(x_sample)
+y_sample <- matrix(x_des_sample, ncol=6) %*% matrix(true_beta)
+
+xy_sample <- data.frame(x=x_sample, y=y_sample)
+dataset_sample <- data.frame(x_des_sample, y=y_sample)
+```
+
+
+```{r}
+# 観測値と目的変数真値の可視化
+p <- ggplot() +
+  geom_point(data=input_data, aes(x=x, y=y, color="data"), size=3)+
+  geom_line(data=xy_sample, aes(x=x, y=y, color="True"), linetype="dashed")+
+  scale_color_manual(name="", values = c("data"="blue", "True"="black"),
+                     guide=guide_legend(override.aes = list(
+                       linetype=c("blank", "dashed"),
+                       shape=c(16, NA)
+                     ))
+                     )
+print(p)
+```
+
+# 最小二乗法による推定
+
+```{r}
+ols_model <- lm(y~0+x1+x2+x3+x4+x5+x6, data=dataset)
+summary(ols_model)
+```
+```{r}
+plot(ols_model)
+```
+```{r}
+ols_coef <- coef(ols_model)
+ols_coef_ci <- confint(ols_model)
+df_coefs <- data.frame(variables=rownames(ols_coef_ci), beta=ols_coef, lwr=ols_coef_ci[,1], upr=ols_coef_ci[,2])
+```
+
+```{r}
+ols_pred <- predict(ols_model, newdata = dataset_sample, interval = "prediction")
+ols_pred_with_x <- data.frame(x=x_sample, ols_pred)
+
+p <- ggplot(data=ols_pred_with_x) +
+  geom_point(data=input_data, aes(x=x, y=y, color="data"), size=3)+
+  geom_line(data=xy_sample, aes(x=x, y=y, color="True"), linetype="dashed")+
+  geom_line(aes(x=x, y=fit, color="pred"), linetype="solid")+
+  geom_ribbon(aes(x = x, ymin = lwr, ymax = upr),
+            fill = "blue", alpha = 0.25) +
+  scale_color_manual(name="", values = c("data"="black", "True"="black", "pred"="blue"),
+                     guide=guide_legend(override.aes = list(
+                       linetype=c("blank", "solid", "dashed"),
+                       shape=c(16, NA, NA)
+                     ))
+                     )+
+  labs(title="OLS")
+print(p)
+
+```
+
+
+# ベイズ線形回帰 with Stan（Spike-and-Slab なし）
+
+```{r}
+data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_new=nrow(x_des_sample), X_new=x_des_sample)
+fit <- stan(file='model/regression.stan', data=data_for_stan, seed=1234)
+```
+```{r}
+# we recommend running this is a fresh R session or restarting your current session
+# install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+color_scheme_set("brightblue")
+```
+```{r}
+# check_cmdstan_toolchain()
+# install_cmdstan(cores = 2)
+# cmdstan_path()
+# cmdstan_version()
+
+bayes_reg_model <- cmdstan_model('model/regression.stan')
+```
+```{r}
+
+data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_new=nrow(x_des_sample), X_new=x_des_sample)
+bayes_reg_fit <- bayes_reg_model$sample(
+  data=data_for_stan,
+  seed=1234,
+  chains=4,
+  parallel_chains = 4,
+  refresh = 500 # print update every 500 iters
+)
+```
+```{r}
+bayes_reg_fit$summary()
+```
+
+```{r}
+mcmc_hist(bayes_reg_fit$draws(c("beta", "sigma2")))
+```
+
+```{r}
+mcmc_intervals(bayes_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95)
+```
+```{r}
+mcmc_areas(bayes_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95)
+```
+```{r}
+mcmc_pairs(bayes_reg_fit$draws("beta"), off_diag_args = list(size=1))
+```
+
+```{r}
+str(bayes_reg_fit$diagnostic_summary())
+```
+
+```{r}
+yrep <- bayes_reg_fit$draws("Y_new", format = "draws_matrix")
+ppc_ribbon(y=y_sample[,1], yrep=yrep, x=x_sample, prob_outer = 0.95)
+```
+
+```{r}
+murep <- bayes_reg_fit$draws("mu_new", format = "draws_matrix")
+ppc_ribbon(y=y_sample[,1], yrep=murep, x=x_sample, prob_outer = 0.95)
+```
+
+```{r}
+#install.packages("tidybayes", dependencies = TRUE)
+library(tidybayes)
+```
+
+
+# 緩やかな Spike-and-Slab 線形回帰
