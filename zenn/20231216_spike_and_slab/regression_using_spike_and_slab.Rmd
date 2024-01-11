@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(rstan)
 library(ggplot2)
 library(dplyr)
+library(forcats)
 ```
 
 # データの準備
@@ -155,7 +156,9 @@ mcmc_hist(bayes_reg_fit$draws(c("beta", "sigma2")))
 mcmc_intervals(bayes_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95)
 ```
 ```{r}
-mcmc_areas(bayes_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95)
+mcmc_areas(bayes_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95) +
+  geom_point(data=data.frame(beta=true_beta, index=c(7,6,5,4,3,2)), aes(x=beta, y=index), color="red", shape=18, size=4)+
+  geom_point(x=1,y=1, color="red", shape=18, size=4)
 ```
 ```{r}
 mcmc_pairs(bayes_reg_fit$draws("beta"), off_diag_args = list(size=1))
@@ -167,18 +170,49 @@ str(bayes_reg_fit$diagnostic_summary())
 
 ```{r}
 yrep <- bayes_reg_fit$draws("Y_new", format = "draws_matrix")
-ppc_ribbon(y=y_sample[,1], yrep=yrep, x=x_sample, prob_outer = 0.95)
+ppc_ribbon(y=y_sample[,1], yrep=yrep, x=x_sample, prob_outer = 0.95)+
+  geom_point(data=input_data, aes(x=x, y=y), inherit.aes=FALSE, size=3)
 ```
 
 ```{r}
 murep <- bayes_reg_fit$draws("mu_new", format = "draws_matrix")
-ppc_ribbon(y=y_sample[,1], yrep=murep, x=x_sample, prob_outer = 0.95)
+ppc_ribbon(y=y_sample[,1], yrep=murep, x=x_sample, prob_outer = 0.95) +
+  geom_point(data=input_data, aes(x=x, y=y), inherit.aes=FALSE, size=3)
 ```
+
 
 ```{r}
 #install.packages("tidybayes", dependencies = TRUE)
 library(tidybayes)
 ```
+```{r}
+bayes_reg_fit
+```
 
+```{r}
+bayes_reg_fit %>% 
+  spread_draws(beta[index], sigma2) %>%
+  summarise_draws()
+```
+```{r}
+data.frame(beta=true_beta, index=c(1,2,3,4,5,6))
+```
+
+```{r}
+bayes_reg_fit %>% 
+  spread_draws(beta[index]) %>%
+  ggplot(aes(y=fct_rev(as.character(index)), x=beta)) +
+  stat_halfeye(point_interval=median_hdci, .width=c(0.95, 0.50)) +
+  geom_point(data=data.frame(beta=true_beta, index=c(6,5,4,3,2,1)), aes(x=beta, y=index), color="red", shape=18, size=4)
+```
+
+```{r}
+bayes_reg_fit %>% 
+  spread_draws(sigma2) %>%
+  ggplot(aes(x=sigma2)) +
+  stat_halfeye(point_interval=median_hdci, .width=c(0.95, 0.50))+
+  geom_point(x=1, y=0, color="red", shape=18, size=4)
+```
+# Spike-and-Slab 線形回帰
 
 # 緩やかな Spike-and-Slab 線形回帰
