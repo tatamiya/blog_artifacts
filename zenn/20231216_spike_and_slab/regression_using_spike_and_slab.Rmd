@@ -12,6 +12,15 @@ library(rstan)
 library(ggplot2)
 library(dplyr)
 library(forcats)
+
+# install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+color_scheme_set("brightblue")
+
+#install.packages("tidybayes", dependencies = TRUE)
+library(tidybayes)
 ```
 
 # データの準備
@@ -113,28 +122,9 @@ print(p)
 # ベイズ線形回帰 with Stan（Spike-and-Slab なし）
 
 ```{r}
-data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_new=nrow(x_des_sample), X_new=x_des_sample)
-fit <- stan(file='model/regression.stan', data=data_for_stan, seed=1234)
-```
-```{r}
-# we recommend running this is a fresh R session or restarting your current session
-# install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
-
-library(cmdstanr)
-library(posterior)
-library(bayesplot)
-color_scheme_set("brightblue")
-```
-```{r}
-# check_cmdstan_toolchain()
-# install_cmdstan(cores = 2)
-# cmdstan_path()
-# cmdstan_version()
-
 bayes_reg_model <- cmdstan_model('model/regression.stan')
 ```
-```{r}
-
+```{r, cache=TRUE}
 data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_new=nrow(x_des_sample), X_new=x_des_sample)
 bayes_reg_fit <- bayes_reg_model$sample(
   data=data_for_stan,
@@ -145,7 +135,7 @@ bayes_reg_fit <- bayes_reg_model$sample(
 )
 ```
 ```{r}
-bayes_reg_fit$summary()
+bayes_reg_fit$summary(c("beta", "sigma2", "lp__"))
 ```
 
 ```{r}
@@ -181,21 +171,11 @@ ppc_ribbon(y=y_sample[,1], yrep=murep, x=x_sample, prob_outer = 0.95) +
 ```
 
 
-```{r}
-#install.packages("tidybayes", dependencies = TRUE)
-library(tidybayes)
-```
-```{r}
-bayes_reg_fit
-```
 
 ```{r}
 bayes_reg_fit %>% 
   spread_draws(beta[index], sigma2) %>%
   summarise_draws()
-```
-```{r}
-data.frame(beta=true_beta, index=c(1,2,3,4,5,6))
 ```
 
 ```{r}
@@ -213,6 +193,62 @@ bayes_reg_fit %>%
   stat_halfeye(point_interval=median_hdci, .width=c(0.95, 0.50))+
   geom_point(x=1, y=0, color="red", shape=18, size=4)
 ```
-# Spike-and-Slab 線形回帰
 
 # 緩やかな Spike-and-Slab 線形回帰
+
+```{r}
+weak_ss_reg_model <- cmdstan_model('model/weak_spike_and_slab_regression.stan')
+```
+```{r, message=FALSE, cache=TRUE}
+data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_new=nrow(x_des_sample), X_new=x_des_sample)
+#init_vals <- list(rho_pi=c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))
+
+weak_ss_reg_fit <- weak_ss_reg_model$sample(
+  data=data_for_stan,
+  #init = list(init_vals, init_vals),
+  seed=1234,
+  chains=4,
+  parallel_chains = 4,
+  refresh = 500 # print update every 500 iters
+)
+```
+
+
+```{r}
+weak_ss_reg_fit$summary(c("rho_pi", "beta", "sigma2", "lp__"))
+```
+
+```{r}
+mcmc_hist(weak_ss_reg_fit$draws(c("rho_pi", "beta", "sigma2")))
+```
+```{r}
+mcmc_intervals(weak_ss_reg_fit$draws("rho_pi"), prob_outer = 0.95)
+```
+
+```{r}
+mcmc_intervals(weak_ss_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95)
+```
+```{r}
+mcmc_areas(weak_ss_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95) +
+  geom_point(data=data.frame(beta=true_beta, index=c(7,6,5,4,3,2)), aes(x=beta, y=index), color="red", shape=18, size=4)+
+  geom_point(x=1,y=1, color="red", shape=18, size=4)
+```
+
+```{r}
+str(weak_ss_reg_fit$diagnostic_summary())
+```
+
+```{r}
+yrep <- weak_ss_reg_fit$draws("Y_new", format = "draws_matrix")
+ppc_ribbon(y=y_sample[,1], yrep=yrep, x=x_sample, prob_outer = 0.95)+
+  geom_point(data=input_data, aes(x=x, y=y), inherit.aes=FALSE, size=3)
+```
+
+```{r}
+murep <- weak_ss_reg_fit$draws("mu_new", format = "draws_matrix")
+ppc_ribbon(y=y_sample[,1], yrep=murep, x=x_sample, prob_outer = 0.95) +
+  geom_point(data=input_data, aes(x=x, y=y), inherit.aes=FALSE, size=3)
+```
+
+
+# Spike-and-Slab 線形回帰
