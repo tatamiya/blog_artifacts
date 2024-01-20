@@ -205,7 +205,7 @@ data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_n
 
 weak_ss_reg_fit <- weak_ss_reg_model$sample(
   data=data_for_stan,
-  #init = list(init_vals, init_vals),
+  #init = rep(list(init_vals),4),
   seed=1234,
   chains=4,
   parallel_chains = 4,
@@ -215,21 +215,23 @@ weak_ss_reg_fit <- weak_ss_reg_model$sample(
 
 
 ```{r}
-weak_ss_reg_fit$summary(c("rho_pi", "beta", "sigma2", "lp__"))
+#weak_ss_reg_fit$summary(c("rho_pi", "beta", "sigma2", "lp__"))
+weak_ss_reg_fit$summary(c("beta", "tau", "lp__"))
 ```
 
 ```{r}
-mcmc_hist(weak_ss_reg_fit$draws(c("rho_pi", "beta", "sigma2")))
+#mcmc_hist(weak_ss_reg_fit$draws(c("rho_pi", "beta", "sigma2")))
+mcmc_hist(weak_ss_reg_fit$draws(c("beta", "tau")))
 ```
 ```{r}
-mcmc_intervals(weak_ss_reg_fit$draws("rho_pi"), prob_outer = 0.95)
+#mcmc_intervals(weak_ss_reg_fit$draws("rho_pi"), prob_outer = 0.95)
 ```
 
 ```{r}
-mcmc_intervals(weak_ss_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95)
+mcmc_intervals(weak_ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95)
 ```
 ```{r}
-mcmc_areas(weak_ss_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95) +
+mcmc_areas(weak_ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95) +
   geom_point(data=data.frame(beta=true_beta, index=c(7,6,5,4,3,2)), aes(x=beta, y=index), color="red", shape=18, size=4)+
   geom_point(x=1,y=1, color="red", shape=18, size=4)
 ```
@@ -259,18 +261,63 @@ weak_ss_reg_fit %>%
 ```
 
 ```{r}
-weak_ss_reg_fit %>% 
-  spread_draws(rho_pi[index]) %>%
-  ggplot(aes(y=fct_rev(as.character(index)), x=rho_pi)) +
-  stat_pointinterval(point_interval=median_hdci, .width=c(0.95, 0.50))
+#weak_ss_reg_fit %>% 
+#  spread_draws(rho_pi[index]) %>%
+#  ggplot(aes(y=fct_rev(as.character(index)), x=rho_pi)) +
+#  stat_pointinterval(point_interval=median_hdci, .width=c(0.95, 0.50))
 ```
 
 ```{r}
 weak_ss_reg_fit %>% 
-  spread_draws(sigma2) %>%
-  ggplot(aes(x=sigma2)) +
+  spread_draws(tau) %>%
+  ggplot(aes(x=tau)) +
   stat_halfeye(point_interval=median_hdci, .width=c(0.95, 0.50))+
   geom_point(x=1, y=0, color="red", shape=18, size=4)
 ```
 
 # Spike-and-Slab 線形回帰
+
+```{r}
+ss_reg_model <- cmdstan_model('model/spike_and_slab_regression.stan')
+```
+
+```{r, message=FALSE, cache=TRUE}
+data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_new=nrow(x_des_sample), X_new=x_des_sample)
+#init_vals <- list(rho_pi=c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))
+
+ss_reg_fit <- ss_reg_model$sample(
+  data=data_for_stan,
+  #init = rep(list(init_vals),4),
+  seed=1234,
+  chains=1,
+  parallel_chains = 1,
+  refresh = 10 # print update every 500 iters
+)
+```
+
+```{r}
+#weak_ss_reg_fit$summary(c("rho_pi", "beta", "sigma2", "lp__"))
+ss_reg_fit$summary(c("beta", "tau", "lp__"))
+```
+
+```{r}
+#mcmc_hist(weak_ss_reg_fit$draws(c("rho_pi", "beta", "sigma2")))
+mcmc_hist(ss_reg_fit$draws(c("beta", "tau")))
+```
+```{r}
+mcmc_intervals(ss_reg_fit$draws("rho_pi"), prob_outer = 0.95)
+```
+
+```{r}
+mcmc_intervals(ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95)
+```
+
+```{r}
+mcmc_areas(ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95) +
+  geom_point(data=data.frame(beta=true_beta, index=c(7,6,5,4,3,2)), aes(x=beta, y=index), color="red", shape=18, size=4)+
+  geom_point(x=1,y=1, color="red", shape=18, size=4)
+```
+
+```{r}
+str(ss_reg_fit$diagnostic_summary())
+```
