@@ -23,6 +23,7 @@ transformed parameters {
   vector[N] mu;
   mu = X*beta;
   
+  real tau = 1/sigma2;
 }
 
 // The model to be estimated. We model the output

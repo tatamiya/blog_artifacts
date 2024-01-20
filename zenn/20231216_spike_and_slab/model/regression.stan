@@ -10,8 +10,7 @@ data {
   matrix[N_new, D] X_new;
 }
 
-// The parameters accepted by the model. Our model
-// accepts two parameters 'mu' and 'sigma'.
+// The parameters accepted by the model.
 parameters {
   vector[D] beta;
   real<lower=0> sigma2;
@@ -20,11 +19,11 @@ parameters {
 transformed parameters {
   vector[N] mu;
   mu = X*beta;
+  
+  real tau = 1/sigma2;
 }
 
-// The model to be estimated. We model the output
-// 'y' to be normally distributed with mean 'mu'
-// and standard deviation 'sigma'.
+// The model to be estimated.
 model {
   // parameters for beta prior
   //// expected values
