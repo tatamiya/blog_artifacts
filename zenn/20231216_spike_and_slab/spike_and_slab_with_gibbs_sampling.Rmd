@@ -1,0 +1,290 @@
+---
+title: "Spike-and-Slab regression with Gibbs sampling"
+author: "tatamiya"
+date: "2024-01-20"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(matrixStats)
+library(forcats)
+library(tidyr)
+```
+
+# データの準備
+
+$$
+y_i = 2 \sin \left(2\pi \frac{x_i}{8}\right) - \cos \left(2\pi \frac{x_i}{2}\right) + \varepsilon_i, \quad \varepsilon_i \sim N(0, 1)
+$$
+
+```{r}
+# Python 版で作成したデータを読み込む
+input_data <- read.csv("data/spike_and_slab_sample_data_sparse.csv")
+```
+
+```{r}
+# 回帰係数の真の値
+true_beta <- c(2, 0, 0, 0, 0, -1)
+
+# 説明変数の定義（計画行列にまとめる）
+generate_design_matrix <- function(x) {
+  design_matrix <- cbind(
+    x1=sin(2*pi*x/8), x2=cos(2*pi*x/8),
+    x3=sin(2*pi*x/4), x4=cos(2*pi*x/4),
+    x5=sin(2*pi*x/2), x6=cos(2*pi*x/2)
+  )
+ return(design_matrix)
+}
+
+# 説明変数の生成（学習データ）
+x_des <- generate_design_matrix(input_data$x)
+dataset <- data.frame(x_des, y=input_data$y)
+```
+
+
+```{r}
+# 目的変数真値の可視化用データの作成
+x_min <- 0.0
+x_max <- 8.0
+x_sample <- seq(x_min, x_max, 0.01)
+
+x_des_sample <- generate_design_matrix(x_sample)
+y_sample <- matrix(x_des_sample, ncol=6) %*% matrix(true_beta)
+
+xy_sample <- data.frame(x=x_sample, y=y_sample)
+dataset_sample <- data.frame(x_des_sample, y=y_sample)
+```
+
+
+```{r}
+# 観測値と目的変数真値の可視化
+p <- ggplot() +
+  geom_point(data=input_data, aes(x=x, y=y, color="data"), size=3)+
+  geom_line(data=xy_sample, aes(x=x, y=y, color="True"), linetype="dashed")+
+  scale_color_manual(name="", values = c("data"="blue", "True"="black"),
+                     guide=guide_legend(override.aes = list(
+                       linetype=c("blank", "dashed"),
+                       shape=c(16, NA)
+                     ))
+                     )
+print(p)
+```
+# Gibbs Sampling による Spike-and-Slab 回帰
+
+ピーター・D・ホフ（入江 薫・菅澤 翔之助・橋本 真太郎 訳）、「標準 ベイズ統計学」（朝倉書店、2022）の9.3.2節に基づく。
+
+## 周辺分布を計算する関数
+
+```{r}
+
+calc_sigma_inv <- function(X) {
+  n <- dim(X)[1]
+  xt_x <- t(X) %*% X
+  
+  return(0.5 * (xt_x + diag(diag(xt_x), ncol=dim(xt_x)[1])) / n)
+}
+
+calc_omega_inv <- function(X) {
+  Sigma_inv <- calc_sigma_inv(X)
+  xt_x <- t(X) %*% X
+  
+  return(xt_x + Sigma_inv)
+}
+
+calc_S_y_rho <- function(y, X, s) {
+  res <- s + t(y) %*% y
+  if(dim(X)[2]==0) {
+    return(res)
+  }
+  omega_inv <- calc_omega_inv(X)
+  tilde_beta <- solve(omega_inv) %*% t(X) %*% y
+  
+  return(res - t(tilde_beta) %*% omega_inv %*% tilde_beta)
+  
+}
+
+log_p_y_rho <- function(y, X, nu, s) {
+  # log P(Y | rho) から定数分を除いたもの
+  # log |Sigma_rho^{-1}| - log |Omega_rho^{-1}| - 0.5 * (n + nu) * log S_{Y,rho}
+  n <- dim(X)[1]; p <- dim(X)[2]
+  
+  if(p==0) {
+    return(-0.5 * (n+nu) * log(s + t(y) %*% y))
+  }
+  det_sigma_inv_rho <- det(calc_sigma_inv(X))
+  det_omega_inv_rho <- det(calc_omega_inv(X))
+  S_y_rho <- calc_S_y_rho(y, X, s)
+  
+  return(log(det_sigma_inv_rho) - log(det_omega_inv_rho) - 0.5 * (n + nu) * log(S_y_rho))
+}
+```
+
+## Gibbs Sampling of rho
+
+```{r}
+y <- input_data$y
+X <- matrix(x_des, ncol=6)
+
+# 初期値とMCMCの設定
+nu <- 0.01
+r2 <- 0.5; sy <- variance(y)
+s <- nu * (1 - r2) * sy
+p <- dim(x_des)[2]
+rho <- rep(1, p)
+lpy_prev <- log_p_y_rho(y, X, nu, s)
+n_iter <- 10000
+Z <- matrix(NA, n_iter, p)
+
+# Gibbs Sampler
+for (i in 1:n_iter) {
+  for (k in sample(1:p)) {
+    rho_tmp <- rho; rho_tmp[k] <- 1 - rho_tmp[k]
+    lpy_new <- log_p_y_rho(y, X[,rho_tmp==1, drop=FALSE], nu, s)
+    log_odds <- (lpy_new - lpy_prev) * (-1)^(rho_tmp[k]==0)
+    pi_k <- 1/(1+exp(-log_odds))
+    rho[k] <- rbinom(1,1,pi_k)
+    if(rho[k] == rho_tmp[k]){lpy_prev <- lpy_new}
+  }
+  Z[i,]<- rho
+}
+```
+
+
+```{r}
+colMeans(Z)
+```
+
+## beta_rho, sigma2 のサンプリング
+
+```{r}
+X_sample <- matrix(x_des_sample, ncol = dim(x_des_sample)[2])
+n_sample <- dim(X_sample)[1]
+
+
+sigma2_sampled <- matrix(NA, n_iter)
+beta_sampled <- matrix(NA, n_iter, p)
+mu_sampled <- matrix(NA, n_iter, n_sample)
+y_post_pred <- matrix(NA, n_iter, n_sample)
+  
+n <- dim(X)[1]
+for (i in 1:n_iter){
+  rho <- Z[i,]
+  X_rho <- X[,rho==1, drop=FALSE]
+  
+  # Sampling sigma2
+  S_y_rho <- calc_S_y_rho(y, X, s)
+  sigma2_sample <- 1/rgamma(1, shape=(n + nu)*0.5, S_y_rho * 0.5)
+  sigma2_sampled[i] <- sigma2_sample
+  
+  # Sampling beta_rho
+  if(dim(X_rho)[2]>0) {
+    omega_inv_rho_inv <- solve(calc_omega_inv(X_rho))
+    mean_beta_rho <- omega_inv_rho_inv %*% t(X_rho) %*% y
+    
+    beta_rho <- mvrnorm(1, mu=mean_beta_rho, Sigma=sigma2_sample * omega_inv_rho_inv)
+    beta_sampled[i, rho==1] <- beta_rho
+  }
+ 
+  # Sampling mu and Y_post
+  X_sample_rho <- X_sample[,rho==1,drop=FALSE]
+  if (dim(X_rho)[2]>0){
+    mu <- X_sample_rho %*% beta_rho
+  } else {
+    mu <- matrix(0, n_sample)
+  }
+  mu_sampled[i,] <- mu
+  y_post_pred[i,] <- mu + rnorm(1, 0, sqrt(sigma2_sample))
+}
+```
+
+```{r}
+colMeans(beta_sampled, na.rm = TRUE)
+```
+
+
+# 結果の可視化
+
+## 説明変数選択率 rho
+
+```{r}
+colMeans(Z)
+```
+
+```{r}
+mean_rho_post <- colMeans(Z)
+df_rho_post <- data.frame(
+  name=seq(1, length(mean_rho_post)),
+  value=mean_rho_post
+)
+ggplot(data=df_rho_post, aes(x=fct_rev(as.character(name)), y=value)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = value), stat = "identity", hjust=1,colour = "white")+
+  coord_flip()
+```
+
+
+## 回帰係数(beta)・誤差項分散(sigma2)事後分布
+
+```{r}
+colMeans(beta_sampled, na.rm = TRUE)
+```
+
+```{r}
+mean(sigma2_sampled)
+```
+
+
+```{r}
+library(ggdist)
+
+df_params_post <- data.frame(beta_sampled, sigma2=sigma2_sampled) %>%
+  rename(beta1=X1, beta2=X2, beta3=X3, beta4=X4, beta5=X5, beta6=X6)
+
+ggplot(data=gather(df_params_post)) +
+  stat_halfeye(
+    aes(y=fct_rev(key), x=value, fill=stat(cut_cdf_qi(cdf, .width = c(0.05, 0.95)))),
+               .width = c(0.50, 0.95),
+               #point_interval = median_hdci,
+               show.legend = FALSE)+
+  scale_fill_manual(values=c("blue", "skyblue"))+
+  geom_point(data=data.frame(beta=true_beta, index=c(7,6,5,4,3,2)), aes(x=beta, y=index), color="red", shape=18, size=4)+
+  geom_point(x=1,y=1, color="red", shape=18, size=4)
+```
+
+
+## y 事後予測値
+
+```{r}
+df_y_post_pred_sammary <- data.frame(x=x_sample, y_actual=y_sample, mean=colMeans(y_post_pred), colQuantiles(y_post_pred, prob=c(0.025,0.50,0.975))) %>%
+  rename(q2.5=`X2.5.`, q50=`X50.`, q97.5=`X97.5.`)
+```
+
+```{r}
+ggplot(data=df_y_post_pred_sammary) +
+  geom_point(data=input_data, aes(x=x, y=y), size=3)+
+  geom_line(aes(x=x, y=q50), color="blue") +
+  geom_line(aes(x=x, y=y_actual), linetype="dashed") +
+  geom_ribbon(aes(x=x, ymin=q2.5, ymax=q97.5), fill="blue", alpha=0.25)
+```
+
+## mu = X_rho * beta_rho 事後予測値
+
+```{r}
+df_mu_sampled_sammary <- data.frame(x=x_sample, y_actual=y_sample, mean=colMeans(mu_sampled), colQuantiles(mu_sampled, prob=c(0.025,0.50,0.975))) %>%
+  rename(q2.5=`X2.5.`, q50=`X50.`, q97.5=`X97.5.`)
+```
+
+```{r}
+ggplot(data=df_mu_sampled_sammary) +
+  geom_point(data=input_data, aes(x=x, y=y), size=3)+
+  geom_line(aes(x=x, y=q50), color="blue") +
+  geom_line(aes(x=x, y=y_actual), linetype="dashed") +
+  geom_ribbon(aes(x=x, ymin=q2.5, ymax=q97.5), fill="blue", alpha=0.25)
+```
+
