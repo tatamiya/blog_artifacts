@@ -1,4 +1,3 @@
-// The input data is a vector 'y' of length 'N'.
 data {
   int N;
   int D;
@@ -10,13 +9,10 @@ data {
   matrix[N_new, D] X_new;
 }
 
-// The parameters accepted by the model. Our model
-// accepts two parameters 'mu' and 'sigma'.
+// The parameters accepted by the model.
 parameters {
   vector[D] beta;
   real<lower=0> sigma2;
-  
-  vector<lower=0, upper=1>[D] rho_pi;
 }
 
 transformed parameters {
@@ -26,20 +22,20 @@ transformed parameters {
   real tau = 1/sigma2;
 }
 
-// The model to be estimated. We model the output
-// 'y' to be normally distributed with mean 'mu'
-// and standard deviation 'sigma'.
+// The model to be estimated.
 model {
   // parameters for beta prior
   vector[D] beta0;
   array[D] int rho;
   vector[D] rho_v;
+  array[D] real rho_pi;
   vector[D] i_D;
   vector[to_int(2^D)] lp;
   for (i in 1:D) {
     beta0[i] = 0;
     rho[i] = 0;
     rho_v[i] = 0;
+    rho_pi[i] = 0.5;
     i_D[i] = 1;
   }
   
