@@ -6,7 +6,7 @@ functions {
     return  inverse(0.5 / N * (des_mat + diag_matrix(diagonal(des_mat))));
   }
   
-  real spike_and_slab_regression_lpdf(vector Y, matrix X, vector beta, real sigma2, real nu, real s, array[] int rho, vector rho_pi){
+  real spike_and_slab_regression_lpdf(vector Y, matrix X, vector beta, real sigma2, real nu, real s, array[] int rho, array[] real rho_pi){
     int D_rho = sum(rho);
     vector[D_rho] beta_rho;
     vector[D_rho] b0_rho;
@@ -52,7 +52,7 @@ functions {
   }
 }
 
-// The input data is a vector 'y' of length 'N'.
+// The input data
 data {
   int N;
   int D;
@@ -64,13 +64,10 @@ data {
   matrix[N_new, D] X_new;
 }
 
-// The parameters accepted by the model. Our model
-// accepts two parameters 'mu' and 'sigma'.
+// The parameters accepted by the model.
 parameters {
   vector[D] beta;
   real<lower=0> sigma2;
-  
-  vector<lower=0, upper=1>[D] rho_pi;
 }
 
 transformed parameters {
@@ -80,14 +77,14 @@ transformed parameters {
   real tau = 1/sigma2;
 }
 
-// The model to be estimated. We model the output
-// 'y' to be normally distributed with mean 'mu'
-// and standard deviation 'sigma'.
+// The model to be estimated.
 model {
   vector[to_int(2^D)] lp;
   array[D] int rho;
+  array[D] real rho_pi;
   for (i in 1:D) {
     rho[i] = 0;
+    rho_pi[i] = 0.5;
   }
   
   // parameters for sigma^2 prior 

@@ -23,6 +23,7 @@ color_scheme_set("brightblue")
 library(tidybayes)
 ```
 
+
 # データの準備
 
 $$
@@ -139,14 +140,14 @@ bayes_reg_fit$summary(c("beta", "sigma2", "lp__"))
 ```
 
 ```{r}
-mcmc_hist(bayes_reg_fit$draws(c("beta", "sigma2")))
+mcmc_hist(bayes_reg_fit$draws(c("beta", "tau")))
 ```
 
 ```{r}
-mcmc_intervals(bayes_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95)
+mcmc_intervals(bayes_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95)
 ```
 ```{r}
-mcmc_areas(bayes_reg_fit$draws(c("beta", "sigma2")), prob_outer = 0.95) +
+mcmc_areas(bayes_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95) +
   geom_point(data=data.frame(beta=true_beta, index=c(7,6,5,4,3,2)), aes(x=beta, y=index), color="red", shape=18, size=4)+
   geom_point(x=1,y=1, color="red", shape=18, size=4)
 ```
@@ -174,7 +175,7 @@ ppc_ribbon(y=y_sample[,1], yrep=murep, x=x_sample, prob_outer = 0.95) +
 
 ```{r}
 bayes_reg_fit %>% 
-  spread_draws(beta[index], sigma2) %>%
+  spread_draws(beta[index], tau) %>%
   summarise_draws()
 ```
 
@@ -188,15 +189,15 @@ bayes_reg_fit %>%
 
 ```{r}
 bayes_reg_fit %>% 
-  spread_draws(sigma2) %>%
-  ggplot(aes(x=sigma2)) +
+  spread_draws(tau) %>%
+  ggplot(aes(x=tau)) +
   stat_halfeye(point_interval=median_hdci, .width=c(0.95, 0.50))+
   geom_point(x=1, y=0, color="red", shape=18, size=4)
 ```
 
 # 緩やかな Spike-and-Slab 線形回帰
 
-```{r}
+```{r, cache=TRUE}
 weak_ss_reg_model <- cmdstan_model('model/weak_spike_and_slab_regression.stan')
 ```
 ```{r, message=FALSE, cache=TRUE}
@@ -209,6 +210,8 @@ weak_ss_reg_fit <- weak_ss_reg_model$sample(
   seed=1234,
   chains=4,
   parallel_chains = 4,
+  #iter_sampling = 100,
+  #iter_warmup = 100,
   refresh = 500 # print update every 500 iters
 )
 ```
@@ -239,6 +242,23 @@ mcmc_areas(weak_ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95) +
 ```{r}
 str(weak_ss_reg_fit$diagnostic_summary())
 ```
+```{r}
+y_new_wssreg <- weak_ss_reg_fit$draws("Y_new", format = "draws_matrix")
+df_y_new_wssreg <- data.frame(x=x_sample, y_actual=y_sample, mean=colMeans(y_new_wssreg), colQuantiles(y_new_wssreg, prob=c(0.025,0.50,0.975))) %>%
+  rename(q2.5=`X2.5.`, q50=`X50.`, q97.5=`X97.5.`)
+
+ggplot(data=df_y_new_wssreg) +
+  geom_point(data=input_data, aes(x=x, y=y), size=3)+
+  geom_line(aes(x=x, y=q50), color="blue") +
+  geom_line(aes(x=x, y=y_actual), linetype="dashed") +
+  geom_ribbon(aes(x=x, ymin=q2.5, ymax=q97.5), fill="blue", alpha=0.5)+
+  scale_color_manual(name="", values=c("data"="black", "pred"="blue", "actual"="black"),
+                     guide=guide_legend(override.aes = list(
+                       linetype=c("dashed", "blank", "solid"),
+                       shape=c(NA, 16, NA)
+                     ))
+                     )
+```
 
 ```{r}
 yrep <- weak_ss_reg_fit$draws("Y_new", format = "draws_matrix")
@@ -253,18 +273,43 @@ ppc_ribbon(y=y_sample[,1], yrep=murep, x=x_sample, prob_outer = 0.95) +
 ```
 
 ```{r}
-weak_ss_reg_fit %>% 
-  spread_draws(beta[index]) %>%
-  ggplot(aes(y=fct_rev(as.character(index)), x=beta)) +
-  stat_pointinterval(point_interval=median_hdci, .width=c(0.95, 0.50)) +
-  geom_point(data=data.frame(beta=true_beta, index=c(6,5,4,3,2,1)), aes(x=beta, y=index), color="red", shape=18, size=4)
+mu_new_wssreg <- weak_ss_reg_fit$draws("mu_new", format = "draws_matrix")
+df_mu_new_wssreg <- data.frame(x=x_sample, y_actual=y_sample, mean=colMeans(mu_new_wssreg), colQuantiles(mu_new_wssreg, prob=c(0.025,0.50,0.975))) %>%
+  rename(q2.5=`X2.5.`, q50=`X50.`, q97.5=`X97.5.`)
+
+ggplot(data=df_mu_new_wssreg) +
+  geom_point(data=input_data, aes(x=x, y=y, color="data"), size=3)+
+  geom_line(aes(x=x, y=mean, color="pred")) +
+  geom_line(aes(x=x, y=y_actual, color="actual"), linetype="dashed") +
+  geom_ribbon(aes(x=x, ymin=q2.5, ymax=q97.5), fill="blue", alpha=0.25) +
+  scale_color_manual(name="", values=c("data"="black", "pred"="blue", "actual"="black"),
+                     guide=guide_legend(override.aes = list(
+                       linetype=c("dashed", "blank", "solid"),
+                       shape=c(NA, 16, NA)
+                     ))
+                     )
 ```
 
 ```{r}
-#weak_ss_reg_fit %>% 
-#  spread_draws(rho_pi[index]) %>%
-#  ggplot(aes(y=fct_rev(as.character(index)), x=rho_pi)) +
-#  stat_pointinterval(point_interval=median_hdci, .width=c(0.95, 0.50))
+weak_ss_reg_fit %>% 
+  spread_draws(beta[index]) %>%
+  ggplot(aes(y=fct_rev(as.character(index)), x=beta)) +
+  stat_halfeye(point_interval=median_hdci, .width=c(0.95, 0.50)) +
+  geom_vline(xintercept=0,color="gray", linetype='dashed') +
+  geom_point(data=data.frame(beta=true_beta, index=c(6,5,4,3,2,1)), aes(x=beta, y=index), color="red", shape=18, size=4) +
+  labs(y="index")
+```
+```{r}
+
+weak_ss_reg_fit %>% 
+  spread_draws(beta[index], tau)
+```
+
+```{r}
+# weak_ss_reg_fit %>% 
+#   spread_draws(rho_pi[index]) %>%
+#   ggplot(aes(y=fct_rev(as.character(index)), x=rho_pi)) +
+#   stat_pointinterval(point_interval=median_hdci, .width=c(0.95, 0.50))
 ```
 
 ```{r}
@@ -275,6 +320,11 @@ weak_ss_reg_fit %>%
   geom_point(x=1, y=0, color="red", shape=18, size=4)
 ```
 
+```{r}
+weak_ss_reg_fit %>%
+  spread_draws(beta[index]) %>%
+  
+```
 # Spike-and-Slab 線形回帰
 
 ```{r}
@@ -289,23 +339,28 @@ ss_reg_fit <- ss_reg_model$sample(
   data=data_for_stan,
   #init = rep(list(init_vals),4),
   seed=1234,
-  chains=1,
-  parallel_chains = 1,
+  chains=4,
+  parallel_chains = 4,
+  #iter_warmup = 100,
+  #iter_sampling = 100,
   refresh = 10 # print update every 500 iters
 )
 ```
 
 ```{r}
-#weak_ss_reg_fit$summary(c("rho_pi", "beta", "sigma2", "lp__"))
-ss_reg_fit$summary(c("beta", "tau", "lp__"))
+ss_reg_fit_diag <- ss_reg_fit$summary(c("beta", "sigma2", "lp__"))
+ss_reg_fit_diag
+```
+```{r}
+ggplot(data=ss_reg_fit_diag, aes(x=rhat, y=fct_rev(variable))) +
+  geom_point(color="red", size=3)+
+  geom_vline(xintercept=1.1,color="black", linetype='dashed')+
+  labs(y="parameters")
 ```
 
 ```{r}
 #mcmc_hist(weak_ss_reg_fit$draws(c("rho_pi", "beta", "sigma2")))
 mcmc_hist(ss_reg_fit$draws(c("beta", "tau")))
-```
-```{r}
-mcmc_intervals(ss_reg_fit$draws("rho_pi"), prob_outer = 0.95)
 ```
 
 ```{r}
@@ -321,3 +376,8 @@ mcmc_areas(ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95) +
 ```{r}
 str(ss_reg_fit$diagnostic_summary())
 ```
+
+```{r}
+mcmc_trace(ss_reg_fit$draws(c("lp__", "beta", "sigma2")))
+```
+
