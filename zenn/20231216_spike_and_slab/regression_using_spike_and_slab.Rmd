@@ -195,6 +195,13 @@ bayes_reg_fit %>%
   geom_point(x=1, y=0, color="red", shape=18, size=4)
 ```
 
+```{r}
+mcmc_trace(bayes_reg_fit$draws(c("lp__", "beta", "sigma2")))
+```
+
+```{r}
+mcmc_dens_overlay(bayes_reg_fit$draws(c("lp__", "beta", "sigma2")))
+```
 # 緩やかな Spike-and-Slab 線形回帰
 
 ```{r, cache=TRUE}
@@ -321,10 +328,13 @@ weak_ss_reg_fit %>%
 ```
 
 ```{r}
-weak_ss_reg_fit %>%
-  spread_draws(beta[index]) %>%
-  
+mcmc_trace(weak_ss_reg_fit$draws(c("lp__", "beta", "sigma2")))
 ```
+
+```{r}
+mcmc_dens_overlay(weak_ss_reg_fit$draws(c("lp__", "beta", "sigma2")))
+```
+
 # Spike-and-Slab 線形回帰
 
 ```{r}
@@ -379,5 +389,9 @@ str(ss_reg_fit$diagnostic_summary())
 
 ```{r}
 mcmc_trace(ss_reg_fit$draws(c("lp__", "beta", "sigma2")))
+```
+
+```{r}
+mcmc_dens_overlay(ss_reg_fit$draws(c("lp__", "beta", "sigma2")))
 ```
 
