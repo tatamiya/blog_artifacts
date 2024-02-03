@@ -1,0 +1,135 @@
+---
+title: "完全な Spike-and-Slab 事前分布を用いた線形回帰（試行）"
+author: "tatamiya"
+date: "2024-02-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+color_scheme_set("brightblue")
+
+library(tidybayes)
+```
+
+
+# データの準備
+
+$$
+y_i = 2 \sin \left(2\pi \frac{x_i}{8}\right) - \cos \left(2\pi \frac{x_i}{2}\right) + \varepsilon_i, \quad \varepsilon_i \sim N(0, 1)
+$$
+
+```{r}
+# Python 版で作成したデータを読み込む
+input_data <- read.csv("data/spike_and_slab_sample_data_sparse.csv")
+```
+
+```{r}
+# 回帰係数の真の値
+true_beta <- c(2, 0, 0, 0, 0, -1)
+
+# 説明変数の定義（計画行列にまとめる）
+generate_design_matrix <- function(x) {
+  design_matrix <- cbind(
+    x1=sin(2*pi*x/8), x2=cos(2*pi*x/8),
+    x3=sin(2*pi*x/4), x4=cos(2*pi*x/4),
+    x5=sin(2*pi*x/2), x6=cos(2*pi*x/2)
+  )
+ return(design_matrix)
+}
+
+# 説明変数の生成（学習データ）
+x_des <- generate_design_matrix(input_data$x)
+dataset <- data.frame(x_des, y=input_data$y)
+```
+
+
+```{r}
+# 目的変数真値の可視化用データの作成
+x_min <- 0.0
+x_max <- 8.0
+x_sample <- seq(x_min, x_max, 0.01)
+
+x_des_sample <- generate_design_matrix(x_sample)
+y_sample <- matrix(x_des_sample, ncol=6) %*% matrix(true_beta)
+
+xy_sample <- data.frame(x=x_sample, y=y_sample)
+dataset_sample <- data.frame(x_des_sample, y=y_sample)
+```
+
+
+```{r}
+# 観測値と目的変数真値の可視化
+p <- ggplot() +
+  geom_point(data=input_data, aes(x=x, y=y, color="data"), size=3)+
+  geom_line(data=xy_sample, aes(x=x, y=y, color="True"), linetype="dashed")+
+  scale_color_manual(name="", values = c("data"="blue", "True"="black"),
+                     guide=guide_legend(override.aes = list(
+                       linetype=c("blank", "dashed"),
+                       shape=c(16, NA)
+                     ))
+                     )
+print(p)
+```
+
+# 完全な Spike-and-Slab 線形回帰
+
+```{r}
+ss_reg_model <- cmdstan_model('model/spike_and_slab_regression.stan')
+```
+
+```{r, message=FALSE, cache=TRUE}
+data_for_stan <- list(N=nrow(x_des), D=ncol(x_des), X=x_des, Y=input_data$y, N_new=nrow(x_des_sample), X_new=x_des_sample)
+
+ss_reg_fit <- ss_reg_model$sample(
+  data=data_for_stan,
+  seed=1234,
+  chains=4,
+  parallel_chains = 4,
+  refresh = 100 # print update every 100 iters
+)
+```
+
+```{r}
+ss_reg_fit_diag <- ss_reg_fit$summary(c("beta", "sigma2", "lp__"))
+ss_reg_fit_diag
+```
+```{r}
+ggplot(data=ss_reg_fit_diag, aes(x=rhat, y=fct_rev(variable))) +
+  geom_point(color="red", size=3)+
+  geom_vline(xintercept=1.1,color="black", linetype='dashed')+
+  labs(y="parameters")
+```
+
+```{r}
+mcmc_hist(ss_reg_fit$draws(c("beta", "tau")))
+```
+
+```{r}
+mcmc_intervals(ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95)
+```
+
+```{r}
+mcmc_areas(ss_reg_fit$draws(c("beta", "tau")), prob_outer = 0.95) +
+  geom_point(data=data.frame(beta=true_beta, index=c(7,6,5,4,3,2)), aes(x=beta, y=index), color="red", shape=18, size=4)+
+  geom_point(x=1,y=1, color="red", shape=18, size=4)
+```
+
+```{r}
+str(ss_reg_fit$diagnostic_summary())
+```
+
+```{r}
+mcmc_trace(ss_reg_fit$draws(c("lp__", "beta", "sigma2")))
+```
+
+```{r}
+mcmc_dens_overlay(ss_reg_fit$draws(c("lp__", "beta", "sigma2")))
+```
