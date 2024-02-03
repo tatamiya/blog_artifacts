@@ -7,19 +7,15 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-#install.packages("rstan", dependencies = TRUE)
-library(rstan)
 library(ggplot2)
 library(dplyr)
 library(forcats)
 
-# install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
 library(cmdstanr)
 library(posterior)
 library(bayesplot)
 color_scheme_set("brightblue")
 
-#install.packages("tidybayes", dependencies = TRUE)
 library(tidybayes)
 ```
 
